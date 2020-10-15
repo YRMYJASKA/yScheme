@@ -87,7 +87,7 @@ readBin = (`div` 2) . foldl (\x y -> (x + y) * 2) 0 . map (\c -> case c of {'0' 
 
 parseBool :: Parser LispVal
 parseBool = do
-                string "#"
+                char '#'
                 x <- oneOf "tf"
                 return $ case x of
                                 't' -> Bool True
@@ -125,10 +125,10 @@ parseQuoted = do
 -- Finally, put all the parsers into one
 parseExpr :: Parser LispVal
 parseExpr = parseString
+         <|> parseAtom
          <|> try parseCharacter
-         <|> try parseAtom
-         <|> try parseNumber
          <|> try parseBool
+         <|> try parseNumber
          <|> parseQuoted
          <|> do char '('
                 x <- try parseList <|> parseDottedList
@@ -168,18 +168,54 @@ primitives = [("+", numericBinop (+)),
               ("/", numericBinop div),
               ("mod", numericBinop mod),
               ("quotient", numericBinop quot),
-              ("remainder", numericBinop rem)]
+              ("remainder", numericBinop rem),
+              ("symbol->string", symbToString),
+              ("string->symbol", stringToSymb),
+              ("boolean?", typecheckOp boolcheckComp),
+              ("symbol?",  typecheckOp symbcheckComp),
+              ("string?",  typecheckOp strcheckComp),
+              ("number?",  typecheckOp numcheckComp)]
 numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> LispVal
 numericBinop op params = Number $ foldl1 op $ map unpackNum params
 
 unpackNum :: LispVal -> Integer
 unpackNum (Number n) = n
+{-
 unpackNum (String n) = let parsed = reads n :: [(Integer, String)] in
                            if null parsed
                               then 0
                               else fst $ parsed !! 0
+-}
 unpackNum (List [n]) = unpackNum n
 unpackNum _ = 0
+
+symbToString :: [LispVal] -> LispVal
+symbToString (Atom s:_) = String s
+symbToString _ = String ""
+
+stringToSymb :: [LispVal] -> LispVal
+stringToSymb (String s:_) = Atom s
+stringToSymb _  = String ""
+
+typecheckOp :: (LispVal -> Bool) -> [LispVal] -> LispVal
+typecheckOp op params = Bool $ op $ head params
+
+boolcheckComp :: LispVal -> Bool
+boolcheckComp (Bool _) = True
+boolcheckComp _ = False
+
+symbcheckComp :: LispVal -> Bool
+symbcheckComp (Atom _) = True
+symbcheckComp _ = False
+
+numcheckComp :: LispVal -> Bool
+numcheckComp (Number _) = True
+numcheckComp _ = False
+
+strcheckComp :: LispVal -> Bool
+strcheckComp (String _) = True
+strcheckComp _ = False
+
 
 -- Evaluation --
 apply :: String -> [LispVal] -> LispVal
@@ -187,6 +223,7 @@ apply func args = maybe (Bool False) ($ args) $ lookup func primitives
 
 eval :: LispVal -> LispVal
 eval val@(String _) = val
+eval val@(Atom _) = val
 eval val@(Number _) = val
 eval val@(Float _) = val
 eval val@(Character _) = val
