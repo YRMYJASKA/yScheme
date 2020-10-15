@@ -171,6 +171,7 @@ primitives = [("+", numericBinop (+)),
               ("remainder", numericBinop rem),
               ("symbol->string", symbToString),
               ("string->symbol", stringToSymb),
+              ("eqv?", isEqv),
               ("boolean?", typecheckOp boolcheckComp),
               ("symbol?",  typecheckOp symbcheckComp),
               ("string?",  typecheckOp strcheckComp),
@@ -196,6 +197,14 @@ symbToString _ = String ""
 stringToSymb :: [LispVal] -> LispVal
 stringToSymb (String s:_) = Atom s
 stringToSymb _  = String ""
+
+isEqv :: [LispVal] -> LispVal
+isEqv ((Atom x):(Atom y):_) = Bool $ x == y
+isEqv ((Number x):(Number y):_) = Bool $ x == y
+isEqv ((Float x):(Float y):_) = Bool $ x == y
+isEqv ((String x):(String y):_) = Bool $ x == y
+isEqv ((Character x):(Character y):_) = Bool $ x == y
+isEqv _ = Bool False
 
 typecheckOp :: (LispVal -> Bool) -> [LispVal] -> LispVal
 typecheckOp op params = Bool $ op $ head params
