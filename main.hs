@@ -9,7 +9,7 @@ import Numeric (readHex, readOct)
 
 -- Acceptable terminal symbols
 symbol :: Parser Char
-symbol = oneOf "!#$%&|*+-/:<=>?@^_~"
+symbol = oneOf "!$%&|*+-/:<=>?@^_~"
 
 -- Make the parser ignore whitespaces
 spaces :: Parser ()
@@ -23,9 +23,8 @@ data LispVal = Atom String
                 | Number Integer
                 | String String
                 | Bool Bool
-                | Character String
+                | Character Char
                 | Float Float
-                deriving (Show)
 
 -- Parsing LispVal
 
@@ -43,13 +42,16 @@ data LispVal = Atom String
 -- tab                     HT
 parseCharacter :: Parser LispVal
 parseCharacter = do
-                char '#'
-                char '\\'
-                x <-  alphaNum <|> oneOf "\\()[]\"\'" <|> symbol
-                xs <- many letter
-                return $ Character $ if (x:xs) `elem` ["altmode", "backnext", "backspace", "call", "linefeed", "page", "return", "rubout", "space", "tab"]
-                                then  x:xs
-                                else  [x]
+                 string "#\\"
+                 x <- parseCharName <|> anyChar
+                 return $ Character x
+               
+parseCharName :: Parser Char
+parseCharName = do
+                x <- try (string "space" <|> string "newline")
+                return $ case x of
+                        "space" -> ' '
+                        "newline" -> '\n'
 
 parseEscape :: Parser Char
 parseEscape = do
@@ -71,13 +73,10 @@ parseString = do
 
 parseAtom :: Parser LispVal
 parseAtom = do
-                first <- letter
+                first <- letter <|> symbol
                 rest <- many (letter <|> digit <|> symbol)
-                let atom  = first:rest
-                return $ case atom of
-                           "#t" -> Bool True
-                           "#f" -> Bool False
-                           _    -> Atom atom
+                let atom = first:rest
+                return $ Atom atom
 
 intOrFloat :: String -> LispVal
 intOrFloat s = if '.' `elem` s then Float (read s) else Number (read s)
@@ -86,20 +85,26 @@ intOrFloat s = if '.' `elem` s then Float (read s) else Number (read s)
 readBin :: String -> Integer
 readBin = (`div` 2) . foldl (\x y -> (x + y) * 2) 0 . map (\c -> case c of {'0' -> 0; '1' -> 1; _ -> error "Input is not a binary string."})
 
+parseBool :: Parser LispVal
+parseBool = do
+                string "#"
+                x <- oneOf "tf"
+                return $ case x of
+                                't' -> Bool True
+                                'f' -> Bool False
 
 parseNumber :: Parser LispVal
 --parseNumber = liftM (Number . read) $ many1 digit
 parseNumber = do
                 f <- oneOf "#" <|> digit
-                s <- oneOf ".bodx" <|> digit
-                x <- many (alphaNum <|> oneOf ".")
+                x <- many (alphaNum <|> oneOf ".bodx")
                 return (case f of
-                                '#' -> case s of
-                                                'b' -> Number $ readBin  x
-                                                'o' -> Number $ fst $ head (readOct x)
-                                                'd' -> intOrFloat x
-                                                'x' -> Number $ fst $ head (readHex x )
-                                _ -> intOrFloat (f:s:x))
+                                '#' -> case head x of
+                                                'b' -> Number $ readBin  $ tail x
+                                                'o' -> Number $ fst $ head (readOct $ tail x)
+                                                'd' -> intOrFloat $ tail x
+                                                'x' -> Number $ fst $ head (readHex $ tail x )
+                                _ -> intOrFloat (f:x))
 
 parseList :: Parser LispVal
 parseList = liftM List $ sepBy parseExpr spaces
@@ -119,10 +124,11 @@ parseQuoted = do
 
 -- Finally, put all the parsers into one
 parseExpr :: Parser LispVal
-parseExpr = parseAtom
-         <|> parseString
-         <|> parseNumber
-         <|> parseCharacter
+parseExpr = parseString
+         <|> try parseCharacter
+         <|> try parseAtom
+         <|> try parseNumber
+         <|> try parseBool
          <|> parseQuoted
          <|> do char '('
                 x <- try parseList <|> parseDottedList
@@ -132,13 +138,68 @@ parseExpr = parseAtom
 
 
 -- Parse expresion
-readExpr :: String -> String
+readExpr :: String -> LispVal
 readExpr input = case parse (spaces >> parseExpr) "lisp" input of
-  Left err -> "No match: " ++ show err
-  Right val -> "Found value: " ++ show val
+  Left err -> String $ "No match: " ++ show err
+  Right val -> val
 
+-- Displaying Values --
+unwordList :: [LispVal] -> String
+unwordList = unwords . map showVal
+
+showVal :: LispVal -> String
+showVal (String contents) = "\"" ++ contents ++ "\""
+showVal (Character contents) = "'" ++ [contents] ++ "'"
+showVal (Atom name) = name
+showVal (Number contents) = show contents
+showVal (Float contents) = show contents
+showVal (Bool True) = "#t"
+showVal (Bool False) = "#f"
+showVal (List content) = "(" ++ (unwordList content) ++ ")"
+showVal (DottedList head tail) = "(" ++ unwordList head ++ " . " ++ showVal tail  ++ ")"
+
+instance Show LispVal where show = showVal
+
+-- Primitives --
+primitives :: [(String, [LispVal] -> LispVal)]
+primitives = [("+", numericBinop (+)),
+              ("-", numericBinop (-)),
+              ("*", numericBinop (*)),
+              ("/", numericBinop div),
+              ("mod", numericBinop mod),
+              ("quotient", numericBinop quot),
+              ("remainder", numericBinop rem)]
+numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> LispVal
+numericBinop op params = Number $ foldl1 op $ map unpackNum params
+
+unpackNum :: LispVal -> Integer
+unpackNum (Number n) = n
+unpackNum (String n) = let parsed = reads n :: [(Integer, String)] in
+                           if null parsed
+                              then 0
+                              else fst $ parsed !! 0
+unpackNum (List [n]) = unpackNum n
+unpackNum _ = 0
+
+-- Evaluation --
+apply :: String -> [LispVal] -> LispVal
+apply func args = maybe (Bool False) ($ args) $ lookup func primitives
+
+eval :: LispVal -> LispVal
+eval val@(String _) = val
+eval val@(Number _) = val
+eval val@(Float _) = val
+eval val@(Character _) = val
+eval val@(Bool _) = val
+eval (List [Atom "quote", val]) = val
+eval (List (Atom func : args)) = apply func $ map eval args
+
+-- Main Function --
 main :: IO ()
+main = getArgs >>= print . eval . readExpr . head
+{-
 main = do
   (expr:_) <- getArgs
   putStrLn $ "Parsing: " ++ expr
-  putStrLn $ readExpr expr
+  putStrLn  (show  (readExpr  expr))
+-}
