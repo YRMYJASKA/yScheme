@@ -9,6 +9,7 @@ import Control.Monad
 import Control.Monad.Except
 import System.Environment
 import Numeric (readHex, readOct)
+import System.IO
 
 -- Acceptable terminal symbols
 symbol :: Parser Char
@@ -373,12 +374,39 @@ eval (List [Atom "if", pred, conseq, alt]) =
 eval (List (Atom func : args)) = mapM eval args >>= apply func
 eval badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
+-- REPL helper functions --
+
+flushStr :: String -> IO ()
+flushStr str = putStr str >> hFlush stdout
+
+readPrompt :: String -> IO String
+readPrompt prompt = flushStr prompt >> getLine
+
+evalString :: String -> IO String
+evalString expr = return $ extractValue $ trapError (liftM show $ readExpr expr >>= eval)
+
+evalAndPrint :: String -> IO ()
+evalAndPrint expr = evalString expr >>= putStrLn
+
+-- Our own loop because standard implementations suck for our use-case
+until_ :: Monad m => (a -> Bool) -> m a -> (a -> m ()) -> m ()
+until_ pred prompt action = do
+  result <- prompt
+  if pred result
+    then return ()
+    else action result >> until_ pred prompt action
+
+runREPL :: IO ()
+runREPL = until_ (== "quit") (readPrompt "yLisp>>> ") evalAndPrint
+
 -- Main Function --
 main :: IO ()
 main = do
         args <- getArgs
-        evaled <- return $ liftM show $ readExpr (args !! 0) >>= eval
-        putStrLn $ extractValue $ trapError evaled
+        case length args of
+          0 -> runREPL
+          1 -> evalAndPrint $ head args
+          _ -> putStrLn "Program only takes 0 or 1 argument."
 --- main = getArgs >>= print . eval . readExpr . head
 {-
 main = do
